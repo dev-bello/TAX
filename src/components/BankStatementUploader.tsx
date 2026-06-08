@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { UploadCloud, FileText, X, Loader2, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { sanitizeForPrompt } from '../lib/sanitize';
 
 interface Transaction {
   date: string;
@@ -10,26 +11,52 @@ interface Transaction {
   confidence?: number;
 }
 
+export interface TaxSummary {
+  totalRevenue: number;
+  totalExpenses: number;
+  assetPurchases: number;
+  estimatedTaxRate: number;
+  period: string;
+  confidence: number;
+}
+
+interface ExtractionResult {
+  transactions: Transaction[];
+  taxSummary?: TaxSummary;
+}
+
 interface BankStatementUploaderProps {
   onTransactionsExtracted?: (transactions: Transaction[]) => void;
+  onTaxDataExtracted?: (taxSummary: TaxSummary) => void;
+  extractionMode?: 'expenses' | 'tax' | 'both';
   apiKey?: string;
 }
 
 // Moonshot AI API endpoint
 const MOONSHOT_API_URL = 'https://api.moonshot.ai/v1/chat/completions';
 
-export default function BankStatementUploader({ onTransactionsExtracted, apiKey }: BankStatementUploaderProps) {
+export default function BankStatementUploader({
+  onTransactionsExtracted,
+  onTaxDataExtracted,
+  extractionMode = 'expenses',
+  apiKey
+}: BankStatementUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [extractedTransactions, setExtractedTransactions] = useState<Transaction[]>([]);
+  const [taxSummary, setTaxSummary] = useState<TaxSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Use provided API key, environment variable, or fall back to hardcoded one
-  const MOONSHOT_API_KEY = apiKey || process.env.MOONSHOT_API_KEY || 'sk-Ox9DhWOCgmu6eCduQtehi26xKuRlhmgAT6s8oD4NfNJ4npEZ';
+  // Use provided API key or environment variable only - NEVER hardcode keys
+  const MOONSHOT_API_KEY = apiKey || (import.meta as any).env?.VITE_MOONSHOT_API_KEY;
+  
+  if (!MOONSHOT_API_KEY) {
+    console.warn('Moonshot API key not configured. Bank statement parsing will not function.');
+  }
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -42,14 +69,90 @@ export default function BankStatementUploader({ onTransactionsExtracted, apiKey 
   }, []);
 
   const processFileWithAI = async (file: File) => {
-    try {
-      // Read file content
-      const fileContent = await file.text();
-      
-      setUploadProgress(30);
+    if (!MOONSHOT_API_KEY) {
+      setError('AI service is not configured. Please add your VITE_MOONSHOT_API_KEY to the .env file and restart the server.');
+      return;
+    }
 
-      // Create system prompt for transaction extraction
-      const systemPrompt = `You are a financial data extraction specialist. Analyze bank statement data and extract all transactions into structured JSON format.
+    try {
+      setUploadProgress(10);
+
+      // Step 1: Upload file to Moonshot for extraction (works with PDF, Excel, CSV, TXT)
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('purpose', 'file-extract');
+
+      const uploadRes = await fetch('https://api.moonshot.ai/v1/files', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${MOONSHOT_API_KEY}`,
+        },
+        body: formData,
+      });
+
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json().catch(() => ({}));
+        throw new Error(err.error?.message || `File upload failed: ${uploadRes.status}`);
+      }
+
+      const fileObj = await uploadRes.json();
+      const fileId = fileObj.id;
+      setUploadProgress(40);
+
+      // Step 2: Retrieve extracted text content
+      const contentRes = await fetch(`https://api.moonshot.ai/v1/files/${fileId}/content`, {
+        headers: { 'Authorization': `Bearer ${MOONSHOT_API_KEY}` },
+      });
+
+      if (!contentRes.ok) {
+        throw new Error(`Failed to retrieve file content: ${contentRes.status}`);
+      }
+
+      const fileContent = await contentRes.text();
+      setUploadProgress(60);
+
+      // Step 3: Send extracted content to chat completions for structured parsing
+      const isTaxMode = extractionMode === 'tax' || extractionMode === 'both';
+      const isExpenseMode = extractionMode === 'expenses' || extractionMode === 'both';
+
+      const systemPrompt = isTaxMode
+        ? `You are a financial data extraction specialist for Nigerian tax purposes. Analyze bank statement data and extract both detailed transactions AND tax-relevant summary data.
+
+Your task is to:
+1. Parse the bank statement data provided
+2. Identify all individual transactions (deposits and withdrawals)
+3. Categorize transactions into tax-relevant categories: Sales Revenue, Office Expenses, Utilities, Transportation, Professional Services, Asset Purchase, Rent, Salaries, Marketing, Miscellaneous
+4. Calculate tax summary: total revenue, total expenses, asset purchases, estimated tax rate based on revenue size
+5. Determine statement period
+
+Tax Rules for Nigeria:
+- Revenue < ₦25M: 0% tax rate (small company)
+- Revenue ₦25M-₦100M: 20% tax rate (medium company)
+- Revenue > ₦100M: 30% tax rate (large company)
+- Asset purchases may qualify for capital allowances (25% annual depreciation)
+
+Respond ONLY with valid JSON in this exact format:
+{
+  "transactions": [
+    {
+      "date": "2026-03-15",
+      "description": "Transaction description",
+      "amount": 1234.56,
+      "type": "expense",
+      "category": "Office Expenses",
+      "confidence": 0.95
+    }
+  ],
+  "taxSummary": {
+    "totalRevenue": 50000000,
+    "totalExpenses": 25000000,
+    "assetPurchases": 5000000,
+    "estimatedTaxRate": 20,
+    "period": "Jan 2026 - Mar 2026",
+    "confidence": 0.92
+  }
+}`
+        : `You are a financial data extraction specialist. Analyze bank statement data and extract all transactions into structured JSON format.
 
 Your task is to:
 1. Parse the bank statement data provided
@@ -79,15 +182,13 @@ Respond ONLY with valid JSON in this exact format:
   ]
 }`;
 
-      const userPrompt = `Extract all transactions from this bank statement data:
+      const userPrompt = isTaxMode
+        ? 'Extract all transactions AND calculate tax summary from the bank statement data above. Provide ONLY the JSON response with both "transactions" and "taxSummary" fields.'
+        : 'Extract all transactions from the bank statement data above. Provide ONLY the JSON response.';
 
-${fileContent.substring(0, 15000)} ${fileContent.length > 15000 ? '... (truncated for length)' : ''}
+      const sanitizedContent = sanitizeForPrompt(fileContent.substring(0, 20000));
 
-Provide the transactions in the specified JSON format.`;
-
-      setUploadProgress(50);
-
-      const response = await fetch(MOONSHOT_API_URL, {
+      const chatRes = await fetch('https://api.moonshot.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -96,34 +197,28 @@ Provide the transactions in the specified JSON format.`;
         body: JSON.stringify({
           model: 'moonshot-v1-8k',
           messages: [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            {
-              role: 'user',
-              content: userPrompt
-            }
+            { role: 'system', content: systemPrompt },
+            { role: 'system', content: sanitizedContent },
+            { role: 'user', content: userPrompt }
           ],
           temperature: 0.3,
           max_tokens: 4000,
         }),
       });
 
-      setUploadProgress(70);
+      setUploadProgress(80);
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+      if (!chatRes.ok) {
+        const err = await chatRes.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Chat API error: ${chatRes.status}`);
       }
 
-      const data = await response.json();
-      const aiResponse = data.choices?.[0]?.message?.content;
+      const chatData = await chatRes.json();
+      const aiResponse = chatData.choices?.[0]?.message?.content;
 
       if (!aiResponse) {
         throw new Error('Empty response from AI');
       }
-
-      setUploadProgress(80);
 
       // Extract JSON from response
       const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
@@ -132,16 +227,25 @@ Provide the transactions in the specified JSON format.`;
       }
 
       const parsedData = JSON.parse(jsonMatch[0]);
-      
-      if (parsedData.transactions && Array.isArray(parsedData.transactions)) {
+
+      if (isExpenseMode && parsedData.transactions && Array.isArray(parsedData.transactions)) {
         setExtractedTransactions(parsedData.transactions);
+      }
+
+      if (isTaxMode && parsedData.taxSummary) {
+        setTaxSummary(parsedData.taxSummary);
+        if (onTaxDataExtracted) {
+          onTaxDataExtracted(parsedData.taxSummary);
+        }
+      }
+
+      if ((isExpenseMode && parsedData.transactions?.length > 0) || (isTaxMode && parsedData.taxSummary)) {
         setSuccess(true);
-        
-        if (onTransactionsExtracted) {
+        if (onTransactionsExtracted && isExpenseMode && parsedData.transactions) {
           onTransactionsExtracted(parsedData.transactions);
         }
       } else {
-        throw new Error('Invalid transaction data format - expected "transactions" array');
+        throw new Error('No valid data extracted from the statement');
       }
 
       setUploadProgress(100);
@@ -179,21 +283,18 @@ Provide the transactions in the specified JSON format.`;
     setShowPreview(false);
 
     // Validate file type
-    const validTypes = [
-      'application/pdf',
-      'text/csv',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'text/plain'
-    ];
-
     const fileExtension = file.name.toLowerCase();
-    const isValidType = validTypes.includes(file.type) || 
-                       fileExtension.endsWith('.pdf') ||
-                       fileExtension.endsWith('.csv') ||
-                       fileExtension.endsWith('.xls') ||
-                       fileExtension.endsWith('.xlsx') ||
-                       fileExtension.endsWith('.txt');
+    const isValidType = 
+      file.type === 'application/pdf' ||
+      file.type === 'text/csv' ||
+      file.type === 'application/vnd.ms-excel' ||
+      file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      file.type === 'text/plain' ||
+      fileExtension.endsWith('.pdf') ||
+      fileExtension.endsWith('.csv') ||
+      fileExtension.endsWith('.xls') ||
+      fileExtension.endsWith('.xlsx') ||
+      fileExtension.endsWith('.txt');
 
     if (!isValidType) {
       setError('Please upload a PDF, CSV, Excel, or text file containing your bank statement.');

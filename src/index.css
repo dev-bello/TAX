@@ -76,6 +76,12 @@
   .safe-area-right {
     padding-right: env(safe-area-inset-right);
   }
+  .touch-manipulation {
+    touch-action: manipulation;
+  }
+  .min-h-touch {
+    min-height: 44px;
+  }
 }
 
 body {
@@ -98,6 +104,25 @@ h1, h2, h3, h4, h5, h6 {
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: var(--color-outline-variant);
   border-radius: 10px;
+}
+
+/* Hide scrollbar for mobile tabs */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Improve form elements on mobile */
+input, select, textarea {
+  font-size: 16px;
+}
+@media (min-width: 768px) {
+  input, select, textarea {
+    font-size: 14px;
+  }
 }
 
 input[type="range"] {

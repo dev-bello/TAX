@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   X, Building2, Briefcase, Receipt, MapPin, Mail, Phone,
   Calendar, Users, TrendingUp, ShieldCheck, Edit2, CheckCircle2,
   Award, FileText, Clock, AlertCircle
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { useBusinessProfile, getClassification, getTaxRate } from '../hooks/useBusinessProfile';
 import type { BusinessType, TaxYear } from '../hooks/useBusinessProfile';
 
@@ -49,7 +51,9 @@ function formatCurrency(n: number): string {
 }
 
 export default function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
-  const { profile, clearProfile } = useBusinessProfile();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { profile, clearProfile } = useBusinessProfile(user?.id);
   const [isEditing, setIsEditing] = useState(false);
 
   if (!isOpen || !profile) return null;
@@ -58,7 +62,7 @@ export default function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     if (window.confirm('Are you sure you want to reset your profile? This will clear all your business information and return you to onboarding.')) {
       clearProfile();
       onClose();
-      window.dispatchEvent(new CustomEvent('navigateTo', { detail: 'onboarding' }));
+      navigate('/onboarding');
     }
   };
 

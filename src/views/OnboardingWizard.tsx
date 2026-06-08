@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Building2, Users, Receipt, MapPin, Mail, Phone, CheckCircle2,
   ArrowRight, ArrowLeft, ShieldCheck, Briefcase, Calendar, TrendingUp,
-  Loader2, AlertCircle
+  Loader2, AlertCircle, Search
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import HelpTooltip from '../components/HelpTooltip';
+import { useAuth } from '../contexts/AuthContext';
 import { useBusinessProfile, getClassification, getTaxRate } from '../hooks/useBusinessProfile';
+import { isValidCacFormat, lookupCacNumber, normalizeCacNumber, fetchCacTaxId } from '../lib/cacValidation';
+import type { CacCompanyRecord } from '../lib/cacValidation';
 import type { BusinessType, TaxYear, BusinessProfile } from '../hooks/useBusinessProfile';
 
 const STEPS = [
@@ -47,44 +51,6 @@ const TAX_YEARS: { value: TaxYear; label: string }[] = [
   { value: 'fiscal_july', label: 'Fiscal Year (Jul - Jun)' },
 ];
 
-const DRAFT_KEY = 'taxfyp-onboarding-draft';
-
-interface OnboardingDraft {
-  step: number;
-  businessName: string;
-  businessType: BusinessType;
-  yearOfIncorporation: string;
-  cacNumber: string;
-  tin: string;
-  sector: string;
-  numberOfEmployees: string;
-  annualTurnover: string;
-  isProfessional: boolean;
-  vatRegistered: boolean;
-  vatNumber: string;
-  taxYear: TaxYear;
-  businessAddress: string;
-  email: string;
-  phoneNumber: string;
-}
-
-function loadDraft(): OnboardingDraft | null {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveDraft(draft: OnboardingDraft) {
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-}
-
-function clearDraft() {
-  localStorage.removeItem(DRAFT_KEY);
-}
-
 function formatNumberInput(value: string): string {
   const num = value.replace(/[^\d]/g, '');
   return num.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -95,55 +61,37 @@ function parseNumberInput(value: string): number {
 }
 
 export default function OnboardingWizard() {
+  const navigate = useNavigate();
   const { addToast } = useToast();
-  const { setProfile } = useBusinessProfile();
+  const { user } = useAuth();
+  const { setProfile } = useBusinessProfile(user?.id);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCacLookingUp, setIsCacLookingUp] = useState(false);
+  const [isTaxIdLookingUp, setIsTaxIdLookingUp] = useState(false);
+  const [cacError, setCacError] = useState<string | null>(null);
+  const [cacRecord, setCacRecord] = useState<CacCompanyRecord | null>(null);
 
-  // Load draft or start fresh
-  const draft = loadDraft();
-  const [step, setStep] = useState(draft?.step ?? 0);
+  const [step, setStep] = useState(0);
 
   // Form state
-  const [businessName, setBusinessName] = useState(draft?.businessName ?? '');
-  const [businessType, setBusinessType] = useState<BusinessType>(draft?.businessType ?? 'limited_company');
-  const [yearOfIncorporation, setYearOfIncorporation] = useState(draft?.yearOfIncorporation ?? '');
-  const [cacNumber, setCacNumber] = useState(draft?.cacNumber ?? '');
-  const [tin, setTin] = useState(draft?.tin ?? '');
+  const [businessName, setBusinessName] = useState('');
+  const [businessType, setBusinessType] = useState<BusinessType>('limited_company');
+  const [yearOfIncorporation, setYearOfIncorporation] = useState('');
+  const [cacNumber, setCacNumber] = useState('');
+  const [tin, setTin] = useState('');
 
-  const [sector, setSector] = useState(draft?.sector ?? 'technology');
-  const [numberOfEmployees, setNumberOfEmployees] = useState(draft?.numberOfEmployees ?? '');
-  const [annualTurnover, setAnnualTurnover] = useState(draft?.annualTurnover ?? '');
-  const [isProfessional, setIsProfessional] = useState(draft?.isProfessional ?? false);
+  const [sector, setSector] = useState('technology');
+  const [numberOfEmployees, setNumberOfEmployees] = useState('');
+  const [annualTurnover, setAnnualTurnover] = useState('');
+  const [isProfessional, setIsProfessional] = useState(false);
 
-  const [vatRegistered, setVatRegistered] = useState(draft?.vatRegistered ?? false);
-  const [vatNumber, setVatNumber] = useState(draft?.vatNumber ?? '');
-  const [taxYear, setTaxYear] = useState<TaxYear>(draft?.taxYear ?? 'calendar');
+  const [vatRegistered, setVatRegistered] = useState(false);
+  const [vatNumber, setVatNumber] = useState('');
+  const [taxYear, setTaxYear] = useState<TaxYear>('calendar');
 
-  const [businessAddress, setBusinessAddress] = useState(draft?.businessAddress ?? '');
-  const [email, setEmail] = useState(draft?.email ?? '');
-  const [phoneNumber, setPhoneNumber] = useState(draft?.phoneNumber ?? '');
-
-  // Persist draft on every change
-  useEffect(() => {
-    saveDraft({
-      step,
-      businessName,
-      businessType,
-      yearOfIncorporation,
-      cacNumber,
-      tin,
-      sector,
-      numberOfEmployees,
-      annualTurnover,
-      isProfessional,
-      vatRegistered,
-      vatNumber,
-      taxYear,
-      businessAddress,
-      email,
-      phoneNumber,
-    });
-  }, [step, businessName, businessType, yearOfIncorporation, cacNumber, tin, sector, numberOfEmployees, annualTurnover, isProfessional, vatRegistered, vatNumber, taxYear, businessAddress, email, phoneNumber]);
+  const [businessAddress, setBusinessAddress] = useState('');
+  const [email, setEmail] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
 
   const currentYear = new Date().getFullYear();
   const turnoverNum = parseNumberInput(annualTurnover);
@@ -156,6 +104,7 @@ export default function OnboardingWizard() {
         if (!businessName.trim()) { addToast('Please enter your business name', 'error'); return false; }
         if (!yearOfIncorporation || yearNum < 1900 || yearNum > currentYear) { addToast('Please enter a valid year of incorporation', 'error'); return false; }
         if (!cacNumber.trim()) { addToast('Please enter your CAC registration number', 'error'); return false; }
+        if (!isValidCacFormat(cacNumber)) { addToast('Invalid CAC format. Use RC1234567, BN1234567, or IT1234567', 'error'); return false; }
         if (!tin.trim()) { addToast('Please enter your TIN', 'error'); return false; }
         return true;
       case 2:
@@ -184,9 +133,69 @@ export default function OnboardingWizard() {
     setStep(s => Math.max(s - 1, 0));
   };
 
-  const handleComplete = () => {
+  const handleCacLookup = async () => {
+    const normalized = normalizeCacNumber(cacNumber);
+    if (!isValidCacFormat(normalized)) {
+      setCacError('Invalid CAC format. Use RC1234567, BN1234567, or IT1234567');
+      addToast('Invalid CAC format', 'error');
+      return;
+    }
+    setCacError(null);
+    setCacRecord(null);
+    setIsCacLookingUp(true);
+    try {
+      const result = await lookupCacNumber(normalized);
+      setBusinessName(result.businessName || '');
+      if (result.yearOfIncorporation) {
+        setYearOfIncorporation(String(result.yearOfIncorporation));
+      }
+      if (result.businessType) {
+        const validTypes: BusinessType[] = ['sole_proprietorship', 'partnership', 'limited_company', 'plc', 'enterprise'];
+        if (validTypes.includes(result.businessType as BusinessType)) {
+          setBusinessType(result.businessType as BusinessType);
+        }
+      }
+      if (result.rawRecord) {
+        setCacRecord(result.rawRecord);
+      }
+      addToast('Business details retrieved from CAC registry', 'success');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'CAC lookup failed';
+      setCacError(msg);
+      addToast(msg, 'error');
+    } finally {
+      setIsCacLookingUp(false);
+    }
+  };
+
+  const handleFetchTaxId = async () => {
+    if (!cacRecord) {
+      addToast('Please verify the CAC number first', 'error');
+      return;
+    }
+    setIsTaxIdLookingUp(true);
+    try {
+      const taxResult = await fetchCacTaxId(
+        cacRecord.companyId,
+        cacRecord.rcNumber,
+        cacRecord.classificationId
+      );
+      if (taxResult.success && taxResult.taxId) {
+        setTin(taxResult.taxId);
+        addToast('Tax ID retrieved from CAC registry', 'success');
+      } else {
+        addToast(taxResult.message || 'Tax ID not found', 'warning');
+      }
+    } catch {
+      addToast('Tax ID lookup failed. Please enter manually.', 'error');
+    } finally {
+      setIsTaxIdLookingUp(false);
+    }
+  };
+
+  const handleComplete = async () => {
     setIsSaving(true);
-    setTimeout(() => {
+    try {
       const classification = getClassification(turnoverNum);
       const taxRate = getTaxRate(turnoverNum);
 
@@ -211,12 +220,16 @@ export default function OnboardingWizard() {
         taxRate,
       };
 
-      setProfile(profile);
-      clearDraft();
-      setIsSaving(false);
+      await setProfile(profile);
       addToast('Welcome aboard! Your profile has been created.', 'success');
-      window.dispatchEvent(new CustomEvent('navigateTo', { detail: 'dashboard' }));
-    }, 1500);
+      // Reload to refresh global state with new profile
+      window.location.href = '/';
+    } catch (err) {
+      addToast('Failed to save profile. Please try again.', 'error');
+      console.error(err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const progressPercent = ((step) / (STEPS.length - 1)) * 100;
@@ -291,6 +304,33 @@ export default function OnboardingWizard() {
           {step === 1 && (
             <div className="space-y-6">
               <div>
+                <label className="block text-sm font-semibold text-on-surface-variant mb-2">
+                  <HelpTooltip term="CAC Number" explanation="Corporate Affairs Commission registration number. It's like your business's ID card, issued when you register your company in Nigeria. Format: RC1234567 or BN1234567." /> *
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={cacNumber}
+                    onChange={e => { setCacNumber(e.target.value); setCacError(null); }}
+                    placeholder="e.g. RC1234567"
+                    className={`flex-1 bg-surface-container-low border rounded-xl px-4 py-3 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all ${
+                      cacError ? 'border-error' : 'border-outline-variant/30'
+                    }`}
+                  />
+                  <button
+                    onClick={handleCacLookup}
+                    disabled={isCacLookingUp || !cacNumber.trim()}
+                    className="px-4 py-3 rounded-xl font-semibold text-primary border border-primary/30 hover:bg-primary/5 transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0"
+                  >
+                    {isCacLookingUp ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    {isCacLookingUp ? 'Verifying...' : 'Verify'}
+                  </button>
+                </div>
+                {cacError && <p className="text-xs text-error mt-1">{cacError}</p>}
+                <p className="text-xs text-on-surface-variant mt-1">Enter a valid CAC number and click Verify to auto-fill business details.</p>
+              </div>
+
+              <div>
                 <label className="block text-sm font-semibold text-on-surface-variant mb-2">Business Name *</label>
                 <input
                   type="text"
@@ -302,13 +342,15 @@ export default function OnboardingWizard() {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-on-surface-variant mb-2"><HelpTooltip term="Business Type" explanation="The legal structure of your business. Sole Proprietorship = one owner. Limited Company = separate legal entity. Partnership = shared ownership." /> *</label>
+                <label className="block text-sm font-semibold text-on-surface-variant mb-2">
+                  <HelpTooltip term="Business Type" explanation="The legal structure of your business. Sole Proprietorship = one owner. Limited Company = separate legal entity. Partnership = shared ownership." /> *
+                </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {BUSINESS_TYPES.map(type => (
                     <button
                       key={type.value}
                       onClick={() => setBusinessType(type.value)}
-                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                      className={`p-4 sm:p-3 rounded-xl border-2 text-left transition-all min-h-touch touch-manipulation ${
                         businessType === type.value
                           ? 'border-primary bg-primary/5 text-primary'
                           : 'border-outline-variant/30 text-on-surface-variant hover:border-outline-variant hover:bg-surface-container-low'
@@ -335,27 +377,29 @@ export default function OnboardingWizard() {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold text-on-surface-variant mb-2"><HelpTooltip term="CAC Number" explanation="Corporate Affairs Commission registration number. It's like your business's ID card, issued when you register your company in Nigeria. Format: RC1234567 or BN1234567." /> *</label>
-                  <input
-                    type="text"
-                    value={cacNumber}
-                    onChange={e => setCacNumber(e.target.value)}
-                    placeholder="e.g. RC1234567"
-                    className="w-full bg-surface-container-low border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                  />
+                  <label className="block text-sm font-semibold text-on-surface-variant mb-2">
+                    <HelpTooltip term="TIN" explanation="Tax Identification Number - your unique taxpayer ID issued by NRS. Every business must have one to file taxes. It looks like 12345678-0001." /> *
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={tin}
+                      onChange={e => setTin(e.target.value)}
+                      placeholder="e.g. 12345678-0001"
+                      className="flex-1 bg-surface-container-low border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all min-w-0"
+                    />
+                    <button
+                      onClick={handleFetchTaxId}
+                      disabled={isTaxIdLookingUp || !cacRecord}
+                      className="px-3 py-3 rounded-xl font-semibold text-sm text-primary border border-primary/30 hover:bg-primary/5 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 whitespace-nowrap"
+                    >
+                      {isTaxIdLookingUp ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                      <span className="hidden sm:inline">{isTaxIdLookingUp ? 'Fetching...' : 'Get Tax ID'}</span>
+                      <span className="sm:hidden">{isTaxIdLookingUp ? 'Fetching...' : 'Tax ID'}</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-on-surface-variant mt-1">Your TIN is required for all tax filings with the NRS. Click Get Tax ID after verifying your CAC number.</p>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-on-surface-variant mb-2"><HelpTooltip term="TIN" explanation="Tax Identification Number - your unique taxpayer ID issued by NRS. Every business must have one to file taxes. It looks like 12345678-0001." /> *</label>
-                <input
-                  type="text"
-                  value={tin}
-                  onChange={e => setTin(e.target.value)}
-                  placeholder="e.g. 12345678-0001"
-                  className="w-full bg-surface-container-low border border-outline-variant/30 rounded-xl px-4 py-3 text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                />
-                <p className="text-xs text-on-surface-variant mt-1">Your TIN is required for all tax filings with the NRS.</p>
               </div>
             </div>
           )}
@@ -592,10 +636,10 @@ export default function OnboardingWizard() {
 
           {/* Navigation Buttons */}
           {step > 0 && (
-            <div className="flex justify-between mt-8 pt-6 border-t border-outline-variant/15">
+            <div className="flex flex-col-reverse sm:flex-row justify-between mt-8 pt-6 border-t border-outline-variant/15 gap-3">
               <button
                 onClick={handleBack}
-                className="px-6 py-3 rounded-xl font-semibold text-on-surface-variant hover:bg-surface-container-low transition-colors flex items-center gap-2"
+                className="w-full sm:w-auto px-6 py-3 rounded-xl font-semibold text-on-surface-variant hover:bg-surface-container-low transition-colors flex items-center justify-center gap-2 min-h-touch touch-manipulation"
               >
                 <ArrowLeft size={18} /> Back
               </button>
@@ -603,7 +647,7 @@ export default function OnboardingWizard() {
               {step < STEPS.length - 1 ? (
                 <button
                   onClick={handleNext}
-                  className="premium-gradient text-white px-8 py-3 rounded-xl font-semibold shadow-taxfyp hover:opacity-90 transition-opacity flex items-center gap-2"
+                  className="w-full sm:w-auto premium-gradient text-white px-8 py-3 rounded-xl font-semibold shadow-taxfyp hover:opacity-90 transition-opacity flex items-center justify-center gap-2 min-h-touch touch-manipulation"
                 >
                   Continue <ArrowRight size={18} />
                 </button>
@@ -611,7 +655,7 @@ export default function OnboardingWizard() {
                 <button
                   onClick={handleComplete}
                   disabled={isSaving}
-                  className="premium-gradient text-white px-8 py-3 rounded-xl font-semibold shadow-taxfyp hover:opacity-90 transition-opacity flex items-center gap-2 disabled:opacity-50"
+                  className="w-full sm:w-auto premium-gradient text-white px-8 py-3 rounded-xl font-semibold shadow-taxfyp hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:opacity-50 min-h-touch touch-manipulation"
                 >
                   {isSaving ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
                   {isSaving ? 'Saving...' : 'Complete Setup'}
@@ -621,11 +665,10 @@ export default function OnboardingWizard() {
           )}
         </div>
 
-        {/* Skip option */}
-        {step === 0 && (
+        {/* Progress indicator */}
+        {step > 0 && (
           <p className="text-center text-sm text-on-surface-variant mt-6">
-            Already have an account?{' '}
-            <button className="text-primary font-semibold hover:underline">Sign In</button>
+            Step {step} of {STEPS.length - 1}
           </p>
         )}
       </div>

@@ -57,17 +57,24 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ addToast, removeToast }}>
       {children}
-      <div className="fixed top-4 right-4 z-[10001] space-y-2 pointer-events-none">
+      <div 
+        className="fixed top-4 right-4 z-[10001] space-y-2 pointer-events-none"
+        role="region"
+        aria-live="polite"
+        aria-label="Notifications"
+      >
         {toasts.map(toast => (
           <div
             key={toast.id}
             className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg animate-in slide-in-from-right fade-in duration-300 ${bgMap[toast.type]}`}
+            role="alert"
           >
             {iconMap[toast.type]}
             <p className="text-sm font-medium text-on-surface">{toast.message}</p>
             <button
               onClick={() => removeToast(toast.id)}
               className="ml-2 text-outline hover:text-on-surface transition-colors"
+              aria-label="Dismiss notification"
             >
               <X size={16} />
             </button>

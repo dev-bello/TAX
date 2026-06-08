@@ -10,22 +10,48 @@ interface HelpTooltipProps {
 export default function HelpTooltip({ term, explanation, children }: HelpTooltipProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<'top' | 'bottom'>('top');
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
   const tooltipRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const text = explanation || taxTerms[term] || term;
 
+  const updatePosition = () => {
+    if (!tooltipRef.current || !triggerRef.current) return;
+    const tooltipRect = tooltipRef.current.getBoundingClientRect();
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
+
+    const placeAbove = triggerRect.top >= tooltipRect.height + 16;
+    const placeBelow = triggerRect.bottom + tooltipRect.height + 16 <= viewportHeight;
+    const pos = placeAbove ? 'top' : placeBelow ? 'bottom' : 'top';
+    setPosition(pos);
+
+    let top = 0;
+    if (pos === 'top') {
+      top = triggerRect.top - tooltipRect.height - 8;
+    } else {
+      top = triggerRect.bottom + 8;
+    }
+
+    let left = triggerRect.left + triggerRect.width / 2 - tooltipRect.width / 2;
+    left = Math.max(8, Math.min(left, viewportWidth - tooltipRect.width - 8));
+
+    setCoords({ top, left });
+  };
+
   useEffect(() => {
-    if (isOpen && tooltipRef.current && triggerRef.current) {
-      const tooltipRect = tooltipRef.current.getBoundingClientRect();
-      const triggerRect = triggerRef.current.getBoundingClientRect();
-      const viewportHeight = window.innerHeight;
-      
-      if (triggerRect.top < tooltipRect.height + 20) {
-        setPosition('bottom');
-      } else {
-        setPosition('top');
-      }
+    if (isOpen) {
+      requestAnimationFrame(updatePosition);
+      const onResize = () => requestAnimationFrame(updatePosition);
+      window.addEventListener('resize', onResize);
+      window.addEventListener('scroll', onResize, true);
+      return () => {
+        window.removeEventListener('resize', onResize);
+        window.removeEventListener('scroll', onResize, true);
+      };
     }
   }, [isOpen]);
 
@@ -39,37 +65,63 @@ export default function HelpTooltip({ term, explanation, children }: HelpTooltip
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        isOpen &&
+        tooltipRef.current &&
+        triggerRef.current &&
+        !tooltipRef.current.contains(e.target as Node) &&
+        !triggerRef.current.contains(e.target as Node)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const handleEnter = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setIsOpen(true), 300);
+  };
+
+  const handleLeave = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setIsOpen(false), 200);
+  };
+
   return (
-    <span className="relative inline-flex items-center gap-1" ref={triggerRef}>
+    <span
+      className="relative inline-flex items-center gap-1"
+      ref={triggerRef}
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
+    >
       {children || <span className="font-medium">{term}</span>}
       <button
         onClick={(e) => {
           e.stopPropagation();
-          setIsOpen(!isOpen);
+          setIsOpen((o) => !o);
         }}
         className="text-outline hover:text-primary transition-colors focus:outline-none shrink-0"
         aria-label={`Learn about ${term}`}
       >
         <HelpCircle size={16} className="inline" />
       </button>
-      
+
       {isOpen && (
-        <div 
+        <div
           ref={tooltipRef}
-          className={`fixed z-[9999] w-80 p-4 bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/20 animate-in fade-in zoom-in-95 duration-200`}
-          style={{
-            left: '50%',
-            transform: 'translateX(-50%)',
-            ...(position === 'top' 
-              ? { bottom: 'calc(100% + 12px)' } 
-              : { top: 'calc(100% + 12px)' }
-            ),
-          }}
+          className="fixed z-[9999] w-80 p-4 bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/20 animate-in fade-in zoom-in-95 duration-200"
+          style={{ top: coords.top, left: coords.left }}
+          onMouseEnter={handleEnter}
+          onMouseLeave={handleLeave}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex justify-between items-start mb-2">
             <h4 className="font-bold text-primary text-sm">{term}</h4>
-            <button 
+            <button
               onClick={() => setIsOpen(false)}
               className="text-outline hover:text-on-surface"
             >
@@ -77,10 +129,10 @@ export default function HelpTooltip({ term, explanation, children }: HelpTooltip
             </button>
           </div>
           <p className="text-sm text-on-surface-variant leading-relaxed">{text}</p>
-          <div 
+          <div
             className={`absolute left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-container-lowest rotate-45 ${
-              position === 'top' 
-                ? 'bottom-0 translate-y-1/2 border-r border-b border-outline-variant/20' 
+              position === 'top'
+                ? 'bottom-0 translate-y-1/2 border-r border-b border-outline-variant/20'
                 : 'top-0 -translate-y-1/2 border-l border-t border-outline-variant/20'
             }`}
           />

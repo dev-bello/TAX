@@ -3,13 +3,47 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recha
 import { SlidersHorizontal, TrendingUp, Lightbulb, AlertTriangle as AlertIcon, CheckCircle2, X, ChevronRight } from 'lucide-react';
 import HelpTooltip from '../components/HelpTooltip';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
+import { useBusinessProfile } from '../hooks/useBusinessProfile';
+import { hygraphRequest, CREATE_SCENARIO, PUBLISH_SCENARIO } from '../lib/hygraph';
 
 export default function ScenarioPlanner() {
   const { addToast } = useToast();
+  const { user } = useAuth();
+  const { profile } = useBusinessProfile(user?.id);
   const [capex, setCapex] = useState(0);
   const [revenue, setRevenue] = useState(0);
   const [isPioneer, setIsPioneer] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
+
+  const currentTaxAnalysis = useMemo(() => {
+    const currentRevenue = (profile?.annualTurnover ?? 0) / 1_000_000;
+    const currentProfitMargin = 0.40;
+    const currentGrossProfit = currentRevenue * currentProfitMargin;
+    const currentCapitalAllowance = 0;
+    const currentTaxableProfit = Math.max(0, currentGrossProfit - currentCapitalAllowance);
+
+    let currentCitRate = 0;
+    if (currentRevenue > 100) currentCitRate = 0.30;
+    else if (currentRevenue >= 25) currentCitRate = 0.20;
+
+    const currentCitLiability = currentTaxableProfit * currentCitRate;
+    const currentTetFundRate = currentRevenue >= 25 ? 0.02 : 0;
+    const currentTetFundLiability = currentTaxableProfit * currentTetFundRate;
+    const currentTotalLiability = currentCitLiability + currentTetFundLiability;
+
+    return {
+      revenue: currentRevenue,
+      grossProfit: currentGrossProfit,
+      capitalAllowance: currentCapitalAllowance,
+      taxableProfit: currentTaxableProfit,
+      citRate: currentCitRate,
+      citLiability: currentCitLiability,
+      tetFundLiability: currentTetFundLiability,
+      totalLiability: currentTotalLiability,
+      effectiveRate: currentRevenue > 0 ? (currentTotalLiability / currentRevenue) * 100 : 0,
+    };
+  }, [profile]);
 
   const scenarioAnalysis = useMemo(() => {
     const profitMargin = 0.40;
@@ -41,7 +75,7 @@ export default function ScenarioPlanner() {
   }, [revenue, capex, isPioneer]);
 
   const scenarioData = [
-    { name: 'Current', liability: 0 },
+    { name: 'Current', liability: Number(currentTaxAnalysis.totalLiability.toFixed(2)) },
     { name: 'Scenario', liability: Number(scenarioAnalysis.totalLiability.toFixed(2)) },
   ];
 
@@ -66,9 +100,27 @@ export default function ScenarioPlanner() {
     setShowBreakdown(true);
   };
 
-  const handleSaveScenario = () => {
-    localStorage.setItem('taxfyp-scenario', JSON.stringify({ capex, revenue, isPioneer, result: scenarioAnalysis }));
-    addToast('Scenario saved successfully!', 'success');
+  const handleSaveScenario = async () => {
+    if (!profile?.businessName) {
+      addToast('Please complete your business profile first.', 'error');
+      return;
+    }
+    try {
+      const result = await hygraphRequest(CREATE_SCENARIO, {
+        businessName: profile.businessName,
+        name: `Scenario ${new Date().toLocaleDateString()}`,
+        capex,
+        revenue,
+        isPioneer,
+      });
+      if (result?.createScenario?.id) {
+        await hygraphRequest(PUBLISH_SCENARIO, { id: result.createScenario.id });
+      }
+      addToast('Scenario saved to Hygraph successfully!', 'success');
+    } catch (err) {
+      addToast('Failed to save scenario.', 'error');
+      console.error(err);
+    }
   };
 
   return (
@@ -187,7 +239,7 @@ export default function ScenarioPlanner() {
             <div className="grid grid-cols-2 gap-4 mb-8">
               <div className="bg-surface-container-low p-4 rounded-2xl">
                 <div className="text-sm text-on-surface-variant mb-1">Current Tax Owed</div>
-                <div className="text-2xl font-extrabold text-on-surface">₦0.0M</div>
+                <div className="text-2xl font-extrabold text-on-surface">₦{currentTaxAnalysis.totalLiability.toFixed(1)}M</div>
               </div>
               <div className="premium-gradient p-4 rounded-2xl text-white shadow-md">
                 <div className="text-sm text-white/80 mb-1">New Tax Owed</div>
@@ -196,7 +248,7 @@ export default function ScenarioPlanner() {
             </div>
 
             <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <BarChart data={scenarioData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                   <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 14, fill: '#191c1a', fontWeight: 600}} dy={10} />
                   <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#6e7a70'}} />

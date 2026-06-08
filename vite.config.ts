@@ -16,9 +16,29 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      proxy: {
+        '/api/cac-search': {
+          target: 'https://authapp.cac.gov.ng',
+          changeOrigin: true,
+          rewrite: (path) =>
+            path.replace(/^\/api\/cac-search/, '/name_similarity_app/api/public_search/search'),
+          headers: {
+            Origin: 'https://icrp.cac.gov.ng',
+            Referer: 'https://icrp.cac.gov.ng/',
+          },
+        },
+        '/api/cac-tax': {
+          target: 'https://icrp.cac.gov.ng',
+          changeOrigin: true,
+          rewrite: (path) =>
+            path.replace(/^\/api\/cac-tax/, '/tin_service/api/v1/public/tin/generate-tax-id'),
+          headers: {
+            Origin: 'https://icrp.cac.gov.ng',
+            Referer: 'https://icrp.cac.gov.ng/',
+          },
+        },
+      },
     },
   };
 });

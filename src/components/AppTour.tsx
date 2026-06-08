@@ -121,7 +121,8 @@ interface TourProviderProps {
   isOnboarding?: boolean;
 }
 
-const STORAGE_KEY = 'taxfyp-tour-completed';
+// In-memory tour tracking (resets on page refresh)
+let hasSeenTour = false;
 
 export function TourProvider({ children, isOnboarding = false }: TourProviderProps) {
   const [isActive, setIsActive] = useState(false);
@@ -129,8 +130,7 @@ export function TourProvider({ children, isOnboarding = false }: TourProviderPro
   // Auto-start once after initial render (not during onboarding)
   useEffect(() => {
     if (isOnboarding) return;
-    const hasSeen = localStorage.getItem(STORAGE_KEY);
-    if (!hasSeen) {
+    if (!hasSeenTour) {
       const t = setTimeout(() => setIsActive(true), 1200);
       return () => clearTimeout(t);
     }
@@ -142,7 +142,7 @@ export function TourProvider({ children, isOnboarding = false }: TourProviderPro
 
   const endTour = useCallback(() => {
     setIsActive(false);
-    localStorage.setItem(STORAGE_KEY, 'true');
+    hasSeenTour = true;
   }, []);
 
   return (
@@ -409,10 +409,10 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
 /* ------------------------------------------------------------------ */
 
 export function resetTour() {
-  localStorage.removeItem(STORAGE_KEY);
+  hasSeenTour = false;
   window.location.reload();
 }
 
 export function isTourCompleted(): boolean {
-  return !!localStorage.getItem(STORAGE_KEY);
+  return hasSeenTour;
 }

@@ -1,55 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
+import {
+  hygraphRequest,
+  GET_BUSINESS_PROFILE,
+  CREATE_BUSINESS_PROFILE,
+  UPDATE_BUSINESS_PROFILE,
+  PUBLISH_BUSINESS_PROFILE,
+} from '../lib/hygraph';
+import { validateProfile, type BusinessProfile, type BusinessType, type TaxYear } from '../lib/validation';
 
-export type BusinessType = 'sole_proprietorship' | 'partnership' | 'limited_company' | 'plc' | 'enterprise';
-export type TaxYear = 'calendar' | 'fiscal_april' | 'fiscal_july';
+export type { BusinessProfile, BusinessType, TaxYear };
 export type ComplianceStatus = 'compliant' | 'pending' | 'overdue' | 'unknown';
-
-export interface BusinessProfile {
-  // Step 1: Business Identity
-  businessName: string;
-  businessType: BusinessType;
-  yearOfIncorporation: number;
-  cacNumber: string;
-  tin: string;
-
-  // Step 2: Business Operations
-  sector: string;
-  numberOfEmployees: number;
-  annualTurnover: number;
-  isProfessional: boolean;
-
-  // Step 3: Tax Setup
-  vatRegistered: boolean;
-  vatNumber: string;
-  taxYear: TaxYear;
-  complianceStatus: ComplianceStatus;
-
-  // Step 4: Contact
-  businessAddress: string;
-  email: string;
-  phoneNumber: string;
-
-  // Computed
-  classification: string;
-  taxRate: number;
-}
-
-const STORAGE_KEY = 'taxfyp-business-profile';
-
-function loadProfile(): BusinessProfile | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as BusinessProfile;
-  } catch {
-    return null;
-  }
-}
-
-function saveProfile(profile: BusinessProfile) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
-  window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }));
-}
 
 export function getClassification(turnover: number): string {
   if (turnover < 25_000_000) return 'Small Company';
@@ -63,40 +23,162 @@ export function getTaxRate(turnover: number): number {
   return 30;
 }
 
-export function useBusinessProfile() {
-  const [profile, setProfileState] = useState<BusinessProfile | null>(loadProfile);
+function normalizeProfile(raw: any): BusinessProfile | null {
+  if (!raw) return null;
+  // Pass raw data to Zod - schema handles defaults and type coercion
+  return validateProfile(raw);
+}
+
+export function useBusinessProfile(userId?: string) {
+  const [profile, setProfileState] = useState<BusinessProfile | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadProfile = useCallback(async () => {
+    if (!userId) {
+      setIsLoading(false);
+      return null;
+    }
+    try {
+      setIsLoading(true);
+      const result = await hygraphRequest(GET_BUSINESS_PROFILE, { userId });
+      console.log('Profile query result:', result);
+      const raw = result?.businessProfiles?.[0];
+      console.log('Raw profile:', raw);
+      const normalized = normalizeProfile(raw);
+      console.log('Normalized profile:', normalized);
+      setProfileState(normalized);
+      setError(null);
+      return normalized;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load profile';
+      setError(msg);
+      console.error('Hygraph profile load error:', err);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [userId]);
 
   useEffect(() => {
-    const handler = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        setProfileState(loadProfile());
+    if (userId) {
+      loadProfile();
+    } else {
+      setIsLoading(false);
+    }
+  }, [userId, loadProfile]);
+
+  const setProfile = useCallback(async (newProfile: BusinessProfile) => {
+    const validated = validateProfile(newProfile);
+    if (!validated) {
+      throw new Error('Invalid profile data');
+    }
+    if (!userId) {
+      throw new Error('No user ID available');
+    }
+    try {
+      const result = await hygraphRequest(CREATE_BUSINESS_PROFILE, {
+        userId,
+        businessName: validated.businessName,
+        businessType: validated.businessType,
+        yearOfIncorporation: validated.yearOfIncorporation,
+        cacNumber: validated.cacNumber,
+        tin: validated.tin,
+        sector: validated.sector,
+        numberOfEmployees: validated.numberOfEmployees,
+        annualTurnover: validated.annualTurnover,
+        isProfessional: validated.isProfessional,
+        vatRegistered: validated.vatRegistered,
+        vatNumber: validated.vatNumber,
+        taxYear: validated.taxYear,
+        complianceStatus: validated.complianceStatus,
+        businessAddress: validated.businessAddress,
+        email: validated.email,
+        phoneNumber: validated.phoneNumber,
+        classification: validated.classification,
+        taxRate: validated.taxRate,
+      });
+      if (result?.createBusinessProfile?.id) {
+        await hygraphRequest(PUBLISH_BUSINESS_PROFILE, { id: result.createBusinessProfile.id });
       }
-    };
-    window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
-  }, []);
+      setProfileState(validated);
+      setError(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save profile';
+      setError(msg);
+      console.error('Hygraph profile save error:', err);
+      throw err;
+    }
+  }, [userId]);
 
-  const setProfile = useCallback((profile: BusinessProfile) => {
-    saveProfile(profile);
-    setProfileState(profile);
-  }, []);
-
-  const updateProfile = useCallback((updates: Partial<BusinessProfile>) => {
-    setProfileState(prev => {
+  const updateProfile = useCallback(async (updates: Partial<BusinessProfile>) => {
+    if (!userId) return;
+    setProfileState((prev) => {
       if (!prev) return null;
       const next = { ...prev, ...updates };
-      saveProfile(next);
-      return next;
+      const validated = validateProfile(next);
+      if (validated) {
+        // Fire-and-forget save to Hygraph
+        hygraphRequest(GET_BUSINESS_PROFILE, { userId })
+          .then((result: any) => {
+            const existing = result?.businessProfiles?.[0];
+            if (existing?.id) {
+              return hygraphRequest(UPDATE_BUSINESS_PROFILE, {
+                id: existing.id,
+                businessName: validated.businessName,
+                businessType: validated.businessType,
+                yearOfIncorporation: validated.yearOfIncorporation,
+                cacNumber: validated.cacNumber,
+                tin: validated.tin,
+                sector: validated.sector,
+                numberOfEmployees: validated.numberOfEmployees,
+                annualTurnover: validated.annualTurnover,
+                isProfessional: validated.isProfessional,
+                vatRegistered: validated.vatRegistered,
+                vatNumber: validated.vatNumber,
+                taxYear: validated.taxYear,
+                complianceStatus: validated.complianceStatus,
+                businessAddress: validated.businessAddress,
+                email: validated.email,
+                phoneNumber: validated.phoneNumber,
+                classification: validated.classification,
+                taxRate: validated.taxRate,
+              });
+            }
+          })
+          .then((result: any) => {
+            if (result?.updateBusinessProfile?.id) {
+              hygraphRequest(PUBLISH_BUSINESS_PROFILE, { id: result.updateBusinessProfile.id });
+            }
+          })
+          .catch(console.error);
+        return validated;
+      }
+      return prev;
     });
+  }, [userId]);
+
+  const clearProfile = useCallback(async () => {
+    setProfileState(null);
+    setError(null);
   }, []);
 
-  const clearProfile = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
-    setProfileState(null);
-    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }));
-  }, []);
+  const exportData = useCallback(async () => {
+    if (!profile) return JSON.stringify({ error: 'No profile loaded' }, null, 2);
+    return JSON.stringify({ profile, exportedAt: new Date().toISOString() }, null, 2);
+  }, [profile]);
 
   const hasProfile = profile !== null;
 
-  return { profile, hasProfile, setProfile, updateProfile, clearProfile };
+  return {
+    profile,
+    hasProfile,
+    isLoading,
+    error,
+    setProfile,
+    updateProfile,
+    clearProfile,
+    exportData,
+    loadProfile,
+  };
 }

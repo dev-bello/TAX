@@ -1,9 +1,20 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { MessageCircle, X, Send, Bot, User, Loader2, Phone, Mail, UserCircle, ChevronDown } from 'lucide-react';
+import React, { useState, useRef, useEffect } from "react";
+import {
+  MessageCircle,
+  X,
+  Send,
+  Bot,
+  User,
+  Loader2,
+  Phone,
+  Mail,
+  UserCircle,
+  ChevronDown,
+} from "lucide-react";
 
 interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   timestamp: Date;
 }
@@ -37,42 +48,49 @@ const QUICK_PROMPTS = [
 ];
 
 // Moonshot AI API endpoint
-const MOONSHOT_API_URL = 'https://api.moonshot.ai/v1/chat/completions';
+const MOONSHOT_API_URL = "https://api.moonshot.ai/v1/chat/completions";
 
-export default function AIChatAssistant({ apiKey, context }: AIChatAssistantProps) {
+export default function AIChatAssistant({
+  apiKey,
+  context,
+}: AIChatAssistantProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
-      id: 'welcome',
-      role: 'assistant',
+      id: "welcome",
+      role: "assistant",
       content: WELCOME_MESSAGE,
       timestamp: new Date(),
     },
   ]);
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showHumanSupport, setShowHumanSupport] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Use provided API key, environment variable, or fall back to hardcoded one
-  const MOONSHOT_API_KEY = apiKey || process.env.MOONSHOT_API_KEY || 'sk-Ox9DhWOCgmu6eCduQtehi26xKuRlhmgAT6s8oD4NfNJ4npEZ';
+  // Use provided API key or environment variable only - NEVER hardcode keys
+  const MOONSHOT_API_KEY = apiKey || (import.meta as any).env?.VITE_MOONSHOT_API_KEY;
+  
+  if (!MOONSHOT_API_KEY) {
+    console.warn('Moonshot API key not configured. AI chat will not function.');
+  }
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages]);
 
   // Prevent body scroll when chat is open on mobile
   useEffect(() => {
     if (isOpen) {
-      document.body.style.overflow = 'hidden';
+      document.body.style.overflow = "hidden";
     } else {
-      document.body.style.overflow = '';
+      document.body.style.overflow = "";
     }
     return () => {
-      document.body.style.overflow = '';
+      document.body.style.overflow = "";
     };
   }, [isOpen]);
 
@@ -106,10 +124,10 @@ Always structure your answers with:
       return `${basePrompt}
 
 Current User Context:
-${context.companyRevenue ? `- Annual Revenue: ₦${context.companyRevenue.toLocaleString()}` : ''}
-${context.companySize ? `- Company Size: ${context.companySize}` : ''}
-${context.sector ? `- Business Sector: ${context.sector}` : ''}
-${context.currentView ? `- Currently Viewing: ${context.currentView}` : ''}
+${context.companyRevenue ? `- Annual Revenue: ₦${context.companyRevenue.toLocaleString()}` : ""}
+${context.companySize ? `- Company Size: ${context.companySize}` : ""}
+${context.sector ? `- Business Sector: ${context.sector}` : ""}
+${context.currentView ? `- Currently Viewing: ${context.currentView}` : ""}
 
 Use this context to provide personalized advice where relevant.`;
     }
@@ -120,45 +138,57 @@ Use this context to provide personalized advice where relevant.`;
   const handleSendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
 
+    // Check if API key is configured
+    if (!MOONSHOT_API_KEY) {
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "AI service is not configured. Please add your VITE_MOONSHOT_API_KEY to the .env file and restart the development server.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+      return;
+    }
+
     // Add user message
     const userMessage: Message = {
       id: Date.now().toString(),
-      role: 'user',
+      role: "user",
       content: content,
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setInputValue('');
+    setMessages((prev) => [...prev, userMessage]);
+    setInputValue("");
     setIsLoading(true);
 
     try {
       // Build conversation history for Moonshot AI
       const conversationHistory = messages
-        .filter(m => m.id !== 'welcome')
-        .map(m => ({
+        .filter((m) => m.id !== "welcome")
+        .map((m) => ({
           role: m.role,
-          content: m.content
+          content: m.content,
         }));
 
       const response = await fetch(MOONSHOT_API_URL, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MOONSHOT_API_KEY}`,
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MOONSHOT_API_KEY}`,
         },
         body: JSON.stringify({
-          model: 'moonshot-v1-8k',
+          model: "moonshot-v1-8k",
           messages: [
             {
-              role: 'system',
-              content: generateSystemPrompt()
+              role: "system",
+              content: generateSystemPrompt(),
             },
             ...conversationHistory,
             {
-              role: 'user',
-              content: content
-            }
+              role: "user",
+              content: content,
+            },
           ],
           temperature: 0.7,
           max_tokens: 1000,
@@ -170,28 +200,30 @@ Use this context to provide personalized advice where relevant.`;
       }
 
       const data = await response.json();
-      const assistantContent = data.choices?.[0]?.message?.content || 
-        'I apologize, but I could not process your request. Please try again.';
+      const assistantContent =
+        data.choices?.[0]?.message?.content ||
+        "I apologize, but I could not process your request. Please try again.";
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        role: 'assistant',
+        role: "assistant",
         content: assistantContent,
         timestamp: new Date(),
       };
 
-      setMessages(prev => [...prev, assistantMessage]);
+      setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
-      console.error('Error generating response:', error);
-      
+      console.error("Error generating response:", error);
+
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'I apologize, but I encountered an error connecting to the AI service. Please check your internet connection and try again.',
+        role: "assistant",
+        content:
+          "I apologize, but I encountered an error connecting to the AI service. Please check your internet connection and try again.",
         timestamp: new Date(),
       };
 
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
@@ -203,9 +235,9 @@ Use this context to provide personalized advice where relevant.`;
   };
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-NG', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return date.toLocaleTimeString("en-NG", {
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -216,16 +248,19 @@ Use this context to provide personalized advice where relevant.`;
   const requestHumanCallback = () => {
     const callbackMessage: Message = {
       id: Date.now().toString(),
-      role: 'assistant',
-      content: '✅ Callback request received!\n\nAn accountant will call you within 24 hours at your registered phone number.\n\nReference ID: #CB-' + Math.random().toString(36).substr(2, 6).toUpperCase(),
+      role: "assistant",
+      content:
+        "✅ Callback request received!\n\nAn accountant will call you within 24 hours at your registered phone number.\n\nReference ID: #CB-" +
+        Math.random().toString(36).substr(2, 6).toUpperCase(),
       timestamp: new Date(),
     };
-    setMessages(prev => [...prev, callbackMessage]);
+    setMessages((prev) => [...prev, callbackMessage]);
     setShowHumanSupport(false);
   };
 
   const sendEmailToAccountant = () => {
-    window.location.href = 'mailto:support@taxfyp.ng?subject=Tax Support Request&body=Please help me with my tax situation.';
+    window.location.href =
+      "mailto:support@taxfyp.ng?subject=Tax Support Request&body=Please help me with my tax situation.";
   };
 
   return (
@@ -236,19 +271,25 @@ Use this context to provide personalized advice where relevant.`;
         data-tour="ai-assistant"
         className={`
           fixed bottom-4 right-4 lg:bottom-6 lg:right-6 z-50 p-3 lg:p-4 rounded-full shadow-lg transition-all duration-300
-          ${isOpen 
-            ? 'bg-error text-white rotate-90' 
-            : 'bg-primary text-white hover:bg-primary/90 hover:scale-110'
+          ${
+            isOpen
+              ? "bg-error text-white rotate-90"
+              : "bg-primary text-white hover:bg-primary/90 hover:scale-110"
           }
         `}
-        aria-label={isOpen ? 'Close chat' : 'Open chat'}
+        aria-label={isOpen ? "Close chat" : "Open chat"}
       >
-        {isOpen ? <X size={20} className="lg:w-6 lg:h-6" /> : <MessageCircle size={20} className="lg:w-6 lg:h-6" />}
+        {isOpen ? (
+          <X size={20} className="lg:w-6 lg:h-6" />
+        ) : (
+          <MessageCircle size={20} className="lg:w-6 lg:h-6" />
+        )}
       </button>
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="
+        <div
+          className="
           fixed inset-x-0 bottom-0 top-0 lg:inset-auto lg:bottom-24 lg:right-6 z-50 
           w-full lg:w-96 
           h-[100dvh] lg:h-[600px] 
@@ -258,7 +299,8 @@ Use this context to provide personalized advice where relevant.`;
           border-0 lg:border lg:border-outline-variant/20 
           flex flex-col overflow-hidden 
           animate-in slide-in-from-bottom-10 fade-in duration-300
-        ">
+        "
+        >
           {/* Header */}
           <div className="bg-primary p-3 lg:p-4 text-white flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2 lg:gap-3">
@@ -266,11 +308,15 @@ Use this context to provide personalized advice where relevant.`;
                 <Bot size={18} className="lg:w-6 lg:h-6" />
               </div>
               <div>
-                <h3 className="font-bold text-sm lg:text-base">Tax Assistant</h3>
-                <p className="text-[10px] lg:text-xs text-white/70">Ask me anything about Nigerian taxes</p>
+                <h3 className="font-bold text-sm lg:text-base">
+                  Tax Assistant
+                </h3>
+                <p className="text-[10px] lg:text-xs text-white/70">
+                  Ask me anything about Nigerian taxes
+                </p>
               </div>
             </div>
-            <button 
+            <button
               onClick={() => setIsOpen(false)}
               className="lg:hidden p-2 rounded-full hover:bg-white/20 transition-colors"
             >
@@ -284,36 +330,48 @@ Use this context to provide personalized advice where relevant.`;
               <div
                 key={message.id}
                 className={`flex gap-2 lg:gap-3 ${
-                  message.role === 'user' ? 'flex-row-reverse' : ''
+                  message.role === "user" ? "flex-row-reverse" : ""
                 }`}
               >
-                <div className={`
+                <div
+                  className={`
                   w-7 h-7 lg:w-8 lg:h-8 rounded-full flex items-center justify-center shrink-0
-                  ${message.role === 'user' 
-                    ? 'bg-surface-container-high text-on-surface' 
-                    : 'bg-primary-container/30 text-primary'
+                  ${
+                    message.role === "user"
+                      ? "bg-surface-container-high text-on-surface"
+                      : "bg-primary-container/30 text-primary"
                   }
-                `}>
-                  {message.role === 'user' ? <User size={14} className="lg:w-4 lg:h-4" /> : <Bot size={14} className="lg:w-4 lg:h-4" />}
+                `}
+                >
+                  {message.role === "user" ? (
+                    <User size={14} className="lg:w-4 lg:h-4" />
+                  ) : (
+                    <Bot size={14} className="lg:w-4 lg:h-4" />
+                  )}
                 </div>
-                <div className={`
+                <div
+                  className={`
                   max-w-[80%] lg:max-w-[75%] p-2.5 lg:p-3 rounded-2xl text-sm
-                  ${message.role === 'user'
-                    ? 'bg-primary text-white rounded-br-md'
-                    : 'bg-surface-container-low text-on-surface rounded-bl-md'
+                  ${
+                    message.role === "user"
+                      ? "bg-primary text-white rounded-br-md"
+                      : "bg-surface-container-low text-on-surface rounded-bl-md"
                   }
-                `}>
+                `}
+                >
                   <div className="whitespace-pre-wrap">{message.content}</div>
-                  <div className={`
+                  <div
+                    className={`
                     text-[10px] lg:text-xs mt-1
-                    ${message.role === 'user' ? 'text-white/60' : 'text-on-surface-variant'}
-                  `}>
+                    ${message.role === "user" ? "text-white/60" : "text-on-surface-variant"}
+                  `}
+                  >
                     {formatTime(message.timestamp)}
                   </div>
                 </div>
               </div>
             ))}
-            
+
             {isLoading && (
               <div className="flex gap-2 lg:gap-3">
                 <div className="w-7 h-7 lg:w-8 lg:h-8 rounded-full bg-primary-container/30 text-primary flex items-center justify-center shrink-0">
@@ -324,14 +382,16 @@ Use this context to provide personalized advice where relevant.`;
                 </div>
               </div>
             )}
-            
+
             <div ref={messagesEndRef} />
           </div>
 
           {/* Quick Prompts */}
           {messages.length <= 2 && (
             <div className="px-3 lg:px-4 pb-2 shrink-0">
-              <p className="text-[10px] lg:text-xs text-on-surface-variant mb-2">Quick questions:</p>
+              <p className="text-[10px] lg:text-xs text-on-surface-variant mb-2">
+                Quick questions:
+              </p>
               <div className="flex flex-wrap gap-1.5 lg:gap-2">
                 {QUICK_PROMPTS.map((prompt, index) => (
                   <button
@@ -347,7 +407,10 @@ Use this context to provide personalized advice where relevant.`;
           )}
 
           {/* Input Area */}
-          <form onSubmit={handleSubmit} className="p-3 lg:p-4 border-t border-outline-variant/15 shrink-0">
+          <form
+            onSubmit={handleSubmit}
+            className="p-3 lg:p-4 border-t border-outline-variant/15 shrink-0"
+          >
             <div className="flex gap-2">
               <input
                 type="text"
@@ -368,7 +431,10 @@ Use this context to provide personalized advice where relevant.`;
           </form>
 
           {/* Human Support Section */}
-          <div className="p-2.5 lg:p-3 bg-surface-container-low border-t border-outline-variant/10 shrink-0" data-tour="human-support">
+          <div
+            className="p-2.5 lg:p-3 bg-surface-container-low border-t border-outline-variant/10 shrink-0"
+            data-tour="human-support"
+          >
             {!showHumanSupport ? (
               <button
                 onClick={handleHumanSupport}

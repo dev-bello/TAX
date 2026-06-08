@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Package, MonitorSmartphone, Tractor, ShoppingCart, Cross, MoreHorizontal, ShieldCheck, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 import { useBusinessProfile } from '../hooks/useBusinessProfile';
 
 export default function BusinessIdentity() {
+  const navigate = useNavigate();
   const { addToast } = useToast();
-  const { setProfile } = useBusinessProfile();
+  const { user } = useAuth();
+  const { setProfile } = useBusinessProfile(user?.id);
   const [turnover, setTurnover] = useState('50000000');
   const [selectedSector, setSelectedSector] = useState('tech');
   const [isProfessional, setIsProfessional] = useState(true);
@@ -54,15 +58,15 @@ export default function BusinessIdentity() {
       addToast('Business profile saved successfully!', 'success');
       // Store profile via hook
       setProfile({
-        turnover: numTurnover,
+        annualTurnover: numTurnover,
         sector: selectedSector,
         isProfessional,
         classification,
         taxRate,
-      });
-      // Navigate to dashboard
+      } as any);
+      // Reload to refresh global state
       setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('navigateTo', { detail: 'dashboard' }));
+        window.location.href = '/';
       }, 1000);
     }, 1500);
   };

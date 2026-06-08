@@ -12,6 +12,7 @@ interface Transaction {
   category: string;
   status: 'verified' | 'review' | 'high-confidence';
   type: 'expense';
+  confidence?: number;
 }
 
 const INITIAL_TRANSACTIONS: Transaction[] = [];
@@ -30,8 +31,14 @@ export default function ExpenseIntelligence() {
     : transactions.filter(t => t.status === 'review');
 
   const totalSpent = transactions.reduce((sum, t) => sum + t.amount, 0);
-  const autoCategorized = Math.round(((transactions.length - transactions.filter(t => t.status === 'review').length) / transactions.length) * 100);
   const needsReview = transactions.filter(t => t.status === 'review').length;
+  const verifiedCount = transactions.filter(t => t.status === 'verified').length;
+  const highConfidenceCount = transactions.filter(t => t.status === 'high-confidence').length;
+  const matchedCount = verifiedCount + highConfidenceCount;
+  const autoCategorized = transactions.length > 0 ? Math.round((matchedCount / transactions.length) * 100) : 0;
+  const avgConfidence = transactions.length > 0
+    ? Math.round((transactions.reduce((sum, t) => sum + (t.confidence || 0.5), 0) / transactions.length) * 100)
+    : 0;
 
   const handleTransactionsExtracted = (extracted: any[]) => {
     setUploadedTransactions(extracted);
@@ -45,6 +52,7 @@ export default function ExpenseIntelligence() {
       category: t.category || 'Uncategorized',
       status: (t.confidence && t.confidence > 0.8) ? 'verified' : 'review',
       type: 'expense',
+      confidence: t.confidence || 0.5,
     }));
 
     setTransactions(prev => [...newTransactions, ...prev]);
@@ -234,28 +242,34 @@ export default function ExpenseIntelligence() {
               </div>
               <h3 className="font-bold text-primary text-base md:text-lg">Smart Matching</h3>
             </div>
-            <p className="text-xs md:text-sm text-on-surface-variant mb-4 md:mb-6">Our engine has matched 145 bank transactions to uploaded receipts with 98% confidence.</p>
+            <p className="text-xs md:text-sm text-on-surface-variant mb-4 md:mb-6">
+              {transactions.length > 0
+                ? `Our engine has matched ${matchedCount} of ${transactions.length} bank transactions with ${avgConfidence}% confidence.`
+                : 'Upload bank statements to see AI-powered transaction matching.'}
+            </p>
             
-            <div className="space-y-3 md:space-y-4">
-              <div>
-                <div className="flex justify-between text-xs md:text-sm font-semibold mb-1">
-                  <span>Matched</span>
-                  <span className="text-primary">145</span>
+            {transactions.length > 0 && (
+              <div className="space-y-3 md:space-y-4">
+                <div>
+                  <div className="flex justify-between text-xs md:text-sm font-semibold mb-1">
+                    <span>Matched</span>
+                    <span className="text-primary">{matchedCount}</span>
+                  </div>
+                  <div className="w-full bg-surface-container-high rounded-full h-2">
+                    <div className="bg-primary h-2 rounded-full transition-all duration-500" style={{ width: `${autoCategorized}%` }}></div>
+                  </div>
                 </div>
-                <div className="w-full bg-surface-container-high rounded-full h-2">
-                  <div className="bg-primary h-2 rounded-full" style={{ width: '85%' }}></div>
+                <div>
+                  <div className="flex justify-between text-xs md:text-sm font-semibold mb-1">
+                    <span>Needs Review</span>
+                    <span className="text-error">{needsReview}</span>
+                  </div>
+                  <div className="w-full bg-surface-container-high rounded-full h-2">
+                    <div className="bg-error h-2 rounded-full transition-all duration-500" style={{ width: `${transactions.length > 0 ? (needsReview / transactions.length) * 100 : 0}%` }}></div>
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="flex justify-between text-xs md:text-sm font-semibold mb-1">
-                  <span>Missing Receipts</span>
-                  <span className="text-error">12</span>
-                </div>
-                <div className="w-full bg-surface-container-high rounded-full h-2">
-                  <div className="bg-error h-2 rounded-full" style={{ width: '10%' }}></div>
-                </div>
-              </div>
-            </div>
+            )}
 
             <button onClick={() => setShowMatchingDetails(!showMatchingDetails)}
               className="w-full mt-4 md:mt-6 bg-surface-container-lowest text-primary py-2 md:py-2.5 rounded-xl font-semibold hover:bg-surface-container-high transition-colors shadow-sm text-sm md:text-base flex items-center justify-center gap-2">
@@ -267,19 +281,23 @@ export default function ExpenseIntelligence() {
               <div className="mt-4 p-3 bg-surface-container-low rounded-xl space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
                 <div className="flex justify-between text-xs">
                   <span className="text-on-surface-variant">Total Transactions</span>
-                  <span className="font-medium">157</span>
+                  <span className="font-medium">{transactions.length}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-on-surface-variant">With Receipts</span>
-                  <span className="font-medium text-primary">145</span>
+                  <span className="text-on-surface-variant">Auto-Verified</span>
+                  <span className="font-medium text-primary">{verifiedCount}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-on-surface-variant">Missing Receipts</span>
-                  <span className="font-medium text-error">12</span>
+                  <span className="text-on-surface-variant">High Confidence</span>
+                  <span className="font-medium text-tertiary">{highConfidenceCount}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-on-surface-variant">Confidence Score</span>
-                  <span className="font-medium text-tertiary">98%</span>
+                  <span className="text-on-surface-variant">Needs Review</span>
+                  <span className="font-medium text-error">{needsReview}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-on-surface-variant">Avg Confidence</span>
+                  <span className="font-medium text-tertiary">{avgConfidence}%</span>
                 </div>
               </div>
             )}

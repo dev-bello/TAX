@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Calendar as CalendarIcon, AlertTriangle, CheckCircle, Clock, FileText, ArrowRight, ChevronLeft, ChevronRight, UploadCloud, Loader2, CheckCircle2 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import HelpTooltip from '../components/HelpTooltip';
 
 export default function ComplianceCalendar() {
+  const navigate = useNavigate();
   const { addToast } = useToast();
   const now = new Date();
   const [currentMonth, setCurrentMonth] = useState(now.getMonth());
@@ -64,7 +66,7 @@ export default function ComplianceCalendar() {
   };
 
   const handlePrepare = () => {
-    window.dispatchEvent(new CustomEvent('navigateTo', { detail: 'compliance' }));
+    navigate('/compliance');
     addToast('Opening compliance preparation checklist...', 'info');
   };
 

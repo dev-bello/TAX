@@ -29,7 +29,12 @@ export default function ReceiptScanner({ onReceiptExtracted, apiKey }: ReceiptSc
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const MOONSHOT_API_KEY = apiKey || process.env.MOONSHOT_API_KEY || 'sk-Ox9DhWOCgmu6eCduQtehi26xKuRlhmgAT6s8oD4NfNJ4npEZ';
+  // Use provided API key or environment variable only - NEVER hardcode keys
+  const MOONSHOT_API_KEY = apiKey || (import.meta as any).env?.VITE_MOONSHOT_API_KEY;
+  
+  if (!MOONSHOT_API_KEY) {
+    console.warn('Moonshot API key not configured. Receipt scanning will not function.');
+  }
 
   const convertImageToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -41,6 +46,11 @@ export default function ReceiptScanner({ onReceiptExtracted, apiKey }: ReceiptSc
   };
 
   const processReceiptWithAI = async (imageBase64: string) => {
+    if (!MOONSHOT_API_KEY) {
+      setError('AI service is not configured. Please add your VITE_MOONSHOT_API_KEY to the .env file and restart the server.');
+      return;
+    }
+
     try {
       setIsScanning(true);
       setError(null);

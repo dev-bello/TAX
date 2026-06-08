@@ -1,25 +1,24 @@
 import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ResponsiveContainer, LineChart, Line, XAxis, Tooltip, BarChart, Bar, YAxis } from 'recharts';
 import { Wallet, PiggyBank, CalendarDays, ArrowRight, AlertTriangle, CheckCircle2, ExternalLink, Lightbulb, TrendingDown, Info, Loader2 } from 'lucide-react';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 import { useBusinessProfile } from '../hooks/useBusinessProfile';
+import { useTransactions } from '../hooks/useTransactions';
 import HelpTooltip from '../components/HelpTooltip';
 
-function getNextVatDeadline(): Date {
+function getNextVatDeadline(profile: { taxYear: string } | null): Date {
   const now = new Date();
   const deadline = new Date(now.getFullYear(), now.getMonth() + 1, 21);
-  if (now.getDate() > 21) {
-    deadline.setMonth(deadline.getMonth() + 1);
-  }
+  if (now.getDate() > 21) deadline.setMonth(deadline.getMonth() + 1);
   return deadline;
 }
 
-function getNextCitDeadline(): Date {
+function getNextCitDeadline(profile: { taxYear: string } | null): Date {
   const now = new Date();
-  let deadline = new Date(now.getFullYear(), 2, 31); // March 31
-  if (now > deadline) {
-    deadline = new Date(now.getFullYear() + 1, 2, 31);
-  }
+  let deadline = new Date(now.getFullYear(), 2, 31);
+  if (now > deadline) deadline = new Date(now.getFullYear() + 1, 2, 31);
   return deadline;
 }
 
@@ -36,33 +35,40 @@ function formatCurrency(n: number): string {
   return `₦${n.toFixed(0)}`;
 }
 
-const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-
 export default function Dashboard() {
+  const navigate = useNavigate();
   const { addToast } = useToast();
-  const { profile } = useBusinessProfile();
+  const { user } = useAuth();
+  const { profile } = useBusinessProfile(user?.id);
+  const { transactions, monthlyTotals, totalIncome, totalExpense, netProfit } = useTransactions(user?.id);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [showDeductionsModal, setShowDeductionsModal] = useState(false);
   const [claimedDeductions, setClaimedDeductions] = useState<string[]>([]);
 
   const turnover = profile?.annualTurnover ?? 0;
   const taxRate = profile?.taxRate ?? 0;
-  const taxEstimate = turnover * (taxRate / 100);
+  const taxEstimate = netProfit > 0 ? netProfit * (taxRate / 100) : turnover * (taxRate / 100);
 
-  const deductions = [
-    { id: 'internet', label: 'Office Internet (₦540K)', amount: 540000 },
-    { id: 'professional', label: 'Professional Fees (₦350K)', amount: 350000 },
-    { id: 'fuel', label: 'Transportation/Fuel (₦280K)', amount: 280000 },
-    { id: 'utilities', label: 'Utilities (₦195K)', amount: 195000 },
-    { id: 'marketing', label: 'Marketing (₦85K)', amount: 85000 },
-  ];
+  // Real deductions from actual expense transactions
+  const deductions = useMemo(() => {
+    const cats: Record<string, number> = {};
+    transactions.filter(t => t.type === 'expense').forEach(t => {
+      cats[t.category] = (cats[t.category] || 0) + t.amount;
+    });
+    return Object.entries(cats).map(([category, amount], i) => ({
+      id: `ded-${i}`,
+      label: `${category} (${formatCurrency(amount)})`,
+      amount,
+      category,
+    }));
+  }, [transactions]);
 
   const totalSavings = deductions
     .filter(d => claimedDeductions.includes(d.id))
     .reduce((sum, d) => sum + d.amount, 0);
 
-  const vatDeadline = getNextVatDeadline();
-  const citDeadline = getNextCitDeadline();
+  const vatDeadline = getNextVatDeadline(profile);
+  const citDeadline = getNextCitDeadline(profile);
   const vatDays = daysUntil(vatDeadline);
   const citDays = daysUntil(citDeadline);
 
@@ -73,24 +79,23 @@ export default function Dashboard() {
     ? { label: 'VAT Remittance', date: vatDeadline, days: vatDays, urgent: isVatUrgent }
     : { label: 'Company Tax Filing', date: citDeadline, days: citDays, urgent: isCitUrgent };
 
+  // Real line chart data from transactions
   const lineData = useMemo(() => {
-    const base = turnover / 12;
-    return MONTHS.map((m, i) => ({
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months.map(m => ({
       name: m,
-      actual: Math.round(base * (0.7 + Math.sin(i) * 0.3)),
-      baseline: Math.round(base),
+      actual: Math.round((monthlyTotals[m]?.expense || 0)),
+      baseline: Math.round((monthlyTotals[m]?.income || 0) * 0.3), // 30% of income as rough tax proxy
     }));
-  }, [turnover]);
+  }, [monthlyTotals]);
 
+  // Real bar chart from expense categories
   const barData = useMemo(() => {
-    const total = taxEstimate || 1;
-    return [
-      { name: 'Company Tax', value: Math.round((total * 0.45) / 1_000_000) },
-      { name: 'VAT', value: Math.round((total * 0.30) / 1_000_000) },
-      { name: 'Employee Tax', value: Math.round((total * 0.15) / 1_000_000) },
-      { name: 'Levy', value: Math.round((total * 0.10) / 1_000_000) },
-    ];
-  }, [taxEstimate]);
+    return deductions.slice(0, 5).map(d => ({
+      name: d.category,
+      value: Math.round(d.amount / 1_000),
+    }));
+  }, [deductions]);
 
   const handleGenerateReport = () => {
     setIsGeneratingReport(true);
@@ -101,7 +106,7 @@ export default function Dashboard() {
   };
 
   const handlePrepareTaxReturn = () => {
-    window.dispatchEvent(new CustomEvent('navigateTo', { detail: 'calculator' }));
+    navigate('/calculator');
     addToast('Navigating to Tax Calculator...', 'info');
   };
 
@@ -138,6 +143,25 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* No Profile Banner */}
+      {!profile && (
+        <div className="bg-primary-container/10 border border-primary/20 rounded-2xl p-6 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="p-3 bg-primary/10 rounded-xl">
+            <Info size={24} className="text-primary" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-bold text-on-surface mb-1">Complete Your Business Profile</h3>
+            <p className="text-sm text-on-surface-variant">Set up your business details to unlock personalized tax calculations, deadline reminders, and compliance tracking.</p>
+          </div>
+          <button 
+            onClick={() => navigate('/onboarding')}
+            className="premium-gradient text-white px-6 py-3 rounded-xl font-semibold hover:opacity-90 transition-opacity flex items-center gap-2 whitespace-nowrap"
+          >
+            Get Started <ArrowRight size={18} />
+          </button>
+        </div>
+      )}
+
       {/* Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6" data-tour="tax-overview">
         <div className="bg-surface-container-lowest p-6 rounded-3xl shadow-taxfyp border border-outline-variant/15 relative overflow-hidden">
@@ -146,7 +170,7 @@ export default function Dashboard() {
             <div className="p-3 bg-primary-container/10 rounded-xl text-primary">
               <Wallet size={24} />
             </div>
-            <h3 className="text-on-surface-variant font-semibold"><HelpTooltip term="Total Tax Owed" explanation="The estimated amount of tax your business owes based on your turnover and tax rate. This is before deductions and exemptions are applied." /></h3>
+            <h3 className="text-on-surface-variant font-semibold"><HelpTooltip term="Total Tax Owed" explanation="The estimated amount of tax your business owes based on your net profit and tax rate. This is before deductions are applied." /></h3>
           </div>
           <div className="text-4xl font-extrabold text-on-surface mb-2">{formatCurrency(taxEstimate)}</div>
           <div className="text-sm text-primary font-medium flex items-center gap-1">
@@ -160,10 +184,10 @@ export default function Dashboard() {
             <div className="p-3 bg-tertiary-container/10 rounded-xl text-tertiary">
               <PiggyBank size={24} />
             </div>
-            <h3 className="text-on-surface-variant font-semibold"><HelpTooltip term="Money Saved" explanation="The total amount you've saved through tax deductions and smart tax planning. This reduces your taxable income." /></h3>
+            <h3 className="text-on-surface-variant font-semibold"><HelpTooltip term="Money Saved" explanation="The total amount you've saved through claimed tax deductions from your actual expenses." /></h3>
           </div>
           <div className="text-4xl font-extrabold text-on-surface mb-2">{formatCurrency(totalSavings)}</div>
-          <div className="text-sm text-tertiary font-medium">Through smart deductions</div>
+          <div className="text-sm text-tertiary font-medium">From {claimedDeductions.length} claimed deductions</div>
         </div>
 
         <div className="bg-surface-container-lowest p-6 rounded-3xl shadow-taxfyp border border-outline-variant/15 relative overflow-hidden">
@@ -172,7 +196,7 @@ export default function Dashboard() {
             <div className="p-3 bg-error-container/30 rounded-xl text-error">
               <CalendarDays size={24} />
             </div>
-            <h3 className="text-on-surface-variant font-semibold"><HelpTooltip term="Next Deadline" explanation="The nearest upcoming tax filing or payment deadline. Missing deadlines results in penalties and interest charges." /></h3>
+            <h3 className="text-on-surface-variant font-semibold"><HelpTooltip term="Next Deadline" explanation="The nearest upcoming tax filing or payment deadline based on your tax year." /></h3>
           </div>
           <div className="text-4xl font-extrabold text-on-surface mb-2">{nextDeadline.days} Days</div>
           <div className="text-sm text-error font-medium">{nextDeadline.label} ({nextDeadline.date.toLocaleDateString('en-NG', { month: 'short', day: 'numeric' })})</div>
@@ -197,39 +221,56 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-surface-container-lowest p-8 rounded-3xl shadow-taxfyp border border-outline-variant/15">
           <div className="flex justify-between items-center mb-8">
-            <h2 className="text-xl font-bold text-on-surface">Tax Spending Trend</h2>
+            <h2 className="text-xl font-bold text-on-surface">Expense Trend</h2>
             <div className="flex gap-4 text-sm font-medium">
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-primary"></span> Actual</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-outline-variant"></span> Expected</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-primary"></span> Expenses</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-outline-variant"></span> Income (30%)</div>
             </div>
           </div>
           <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={lineData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#6e7a70'}} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#6e7a70'}} />
-                <Tooltip
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)' }}
-                  cursor={{ stroke: '#e1e3df', strokeWidth: 2, strokeDasharray: '4 4' }}
-                />
-                <Line type="monotone" dataKey="actual" stroke="#0a6a48" strokeWidth={4} dot={false} activeDot={{ r: 6, fill: '#0a6a48', stroke: '#fff', strokeWidth: 2 }} />
-                <Line type="monotone" dataKey="baseline" stroke="#bdcabe" strokeWidth={2} strokeDasharray="6 6" dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            {transactions.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                <LineChart data={lineData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#6e7a70'}} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#6e7a70'}} tickFormatter={(v) => `₦${(v/1000).toFixed(0)}K`} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)' }}
+                    cursor={{ stroke: '#e1e3df', strokeWidth: 2, strokeDasharray: '4 4' }}
+                    formatter={(value: number) => [formatCurrency(value), '']}
+                  />
+                  <Line type="monotone" dataKey="actual" stroke="#0a6a48" strokeWidth={4} dot={false} activeDot={{ r: 6, fill: '#0a6a48', stroke: '#fff', strokeWidth: 2 }} name="Expenses" />
+                  <Line type="monotone" dataKey="baseline" stroke="#bdcabe" strokeWidth={2} strokeDasharray="6 6" dot={false} name="Income Proxy" />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-on-surface-variant">
+                <TrendingDown size={48} className="mb-4 opacity-30" />
+                <p className="text-sm font-medium">No transaction data yet</p>
+                <p className="text-xs mt-1">Upload bank statements or add transactions to see trends</p>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="bg-surface-container-lowest p-8 rounded-3xl shadow-taxfyp border border-outline-variant/15">
-          <h2 className="text-xl font-bold text-on-surface mb-8">Where Your Tax Goes</h2>
+          <h2 className="text-xl font-bold text-on-surface mb-8">Top Expense Categories</h2>
           <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={barData} layout="vertical" margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                <XAxis type="number" hide />
-                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fontSize: 14, fill: '#191c1a', fontWeight: 600}} width={110} />
-                <Tooltip cursor={{fill: 'transparent'}} />
-                <Bar dataKey="value" fill="#0a6a48" radius={[0, 8, 8, 0]} barSize={24} />
-              </BarChart>
-            </ResponsiveContainer>
+            {deductions.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                <BarChart data={barData} layout="vertical" margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <XAxis type="number" hide />
+                  <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#191c1a', fontWeight: 600}} width={110} />
+                  <Tooltip cursor={{fill: 'transparent'}} formatter={(value: number) => [`₦${(value * 1000).toLocaleString()}`, '']} />
+                  <Bar dataKey="value" fill="#0a6a48" radius={[0, 8, 8, 0]} barSize={24} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-on-surface-variant">
+                <Wallet size={48} className="mb-4 opacity-30" />
+                <p className="text-sm font-medium">No expenses recorded</p>
+                <p className="text-xs mt-1">Add transactions to see expense breakdown</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -244,7 +285,7 @@ export default function Dashboard() {
             <div className="flex justify-between items-start mb-3">
               <div>
                 <h3 className="font-bold text-on-surface"><HelpTooltip term="VAT Payment Due" explanation="Value Added Tax payment due date. VAT is 7.5% on goods and services. Due by 21st of each month in Nigeria." /></h3>
-                <p className="text-sm text-on-surface-variant">{formatCurrency(taxEstimate * 0.075)} for {vatDeadline.toLocaleDateString('en-NG', { month: 'long', year: 'numeric' })}</p>
+                <p className="text-sm text-on-surface-variant">{formatCurrency(taxEstimate * 0.075)} estimated</p>
               </div>
               <span className="bg-error text-white text-xs font-bold px-2 py-1 rounded-full">{vatDays <= 7 ? 'URGENT' : `${vatDays} DAYS`}</span>
             </div>
@@ -289,61 +330,63 @@ export default function Dashboard() {
         </div>
 
         {/* Savings Opportunity */}
-        <div className="mt-6 p-5 bg-tertiary-container/10 border border-tertiary/20 rounded-2xl" data-tour="savings-opportunity">
-          <div className="flex flex-col sm:flex-row items-start gap-4">
-            <div className="p-3 bg-tertiary/20 rounded-xl">
-              <Lightbulb className="text-tertiary" size={24} />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-bold text-tertiary mb-2">You Could Save {formatCurrency(deductions.reduce((s, d) => s + d.amount, 0) - totalSavings)}!</h3>
-              <p className="text-sm text-on-surface-variant mb-3">
-                We found {deductions.length} expenses you haven't claimed as deductions yet. Adding these could reduce your tax by {formatCurrency(deductions.reduce((s, d) => s + d.amount, 0) - totalSavings)}.
-              </p>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {deductions.slice(0, 2).map(d => (
-                  <span key={d.id} className="text-xs bg-surface-container-high px-2 py-1 rounded-md">{d.label}</span>
-                ))}
-                <span className="text-xs bg-surface-container-high px-2 py-1 rounded-md">+{deductions.length - 2} more</span>
+        {deductions.length > 0 && (
+          <div className="mt-6 p-5 bg-tertiary-container/10 border border-tertiary/20 rounded-2xl" data-tour="savings-opportunity">
+            <div className="flex flex-col sm:flex-row items-start gap-4">
+              <div className="p-3 bg-tertiary/20 rounded-xl">
+                <Lightbulb className="text-tertiary" size={24} />
               </div>
-              <button onClick={handleViewDeductions} className="text-tertiary font-semibold text-sm flex items-center gap-1 hover:underline">
-                View and add deductions <ArrowRight size={16} />
-              </button>
-            </div>
-            <div className="text-left sm:text-right w-full sm:w-auto mt-2 sm:mt-0">
-              <div className="text-2xl font-extrabold text-tertiary">{formatCurrency(deductions.reduce((s, d) => s + d.amount, 0) - totalSavings)}</div>
-              <div className="text-xs text-on-surface-variant">Potential Savings</div>
+              <div className="flex-1">
+                <h3 className="font-bold text-tertiary mb-2">You Could Save {formatCurrency(deductions.reduce((s, d) => s + d.amount, 0) - totalSavings)}!</h3>
+                <p className="text-sm text-on-surface-variant mb-3">
+                  We found {deductions.length} expense categories you haven't claimed as deductions yet. Adding these could reduce your tax.
+                </p>
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {deductions.slice(0, 2).map(d => (
+                    <span key={d.id} className="text-xs bg-surface-container-high px-2 py-1 rounded-md">{d.category}</span>
+                  ))}
+                  {deductions.length > 2 && <span className="text-xs bg-surface-container-high px-2 py-1 rounded-md">+{deductions.length - 2} more</span>}
+                </div>
+                <button onClick={handleViewDeductions} className="text-tertiary font-semibold text-sm flex items-center gap-1 hover:underline">
+                  View and add deductions <ArrowRight size={16} />
+                </button>
+              </div>
+              <div className="text-left sm:text-right w-full sm:w-auto mt-2 sm:mt-0">
+                <div className="text-2xl font-extrabold text-tertiary">{formatCurrency(deductions.reduce((s, d) => s + d.amount, 0) - totalSavings)}</div>
+                <div className="text-xs text-on-surface-variant">Potential Savings</div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Bottom Bento */}
+      {/* Bottom Bento - Real Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-surface-container-low p-6 rounded-3xl">
           <div className="flex justify-between items-start mb-4">
-            <h3 className="font-bold text-on-surface">Uncategorized Expenses</h3>
-            <span className="bg-surface-container-lowest px-3 py-1 rounded-full text-xs font-bold text-on-surface-variant">Action Req</span>
+            <h3 className="font-bold text-on-surface">Transactions</h3>
+            <span className="bg-surface-container-lowest px-3 py-1 rounded-full text-xs font-bold text-on-surface-variant">{transactions.length}</span>
           </div>
-          <div className="text-3xl font-extrabold mb-1">3</div>
-          <p className="text-sm text-on-surface-variant">Needs your review.</p>
+          <div className="text-3xl font-extrabold mb-1">{transactions.filter(t => t.status === 'review').length}</div>
+          <p className="text-sm text-on-surface-variant">Need review</p>
         </div>
 
         <div className="bg-surface-container-low p-6 rounded-3xl">
           <div className="flex justify-between items-start mb-4">
-            <h3 className="font-bold text-on-surface">Audit Risk</h3>
-            <AlertTriangle size={20} className="text-primary" />
+            <h3 className="font-bold text-on-surface">Net Profit</h3>
+            <TrendingDown size={20} className={netProfit >= 0 ? 'text-tertiary' : 'text-error'} />
           </div>
-          <div className="text-3xl font-extrabold mb-1 text-primary">Low</div>
-          <p className="text-sm text-on-surface-variant">Audit probability &lt; 2%.</p>
+          <div className="text-3xl font-extrabold mb-1">{formatCurrency(netProfit)}</div>
+          <p className="text-sm text-on-surface-variant">Income minus expenses</p>
         </div>
 
         <div className="bg-surface-container-low p-6 rounded-3xl">
           <div className="flex justify-between items-start mb-4">
-            <h3 className="font-bold text-on-surface">NRS Connection</h3>
-            <CheckCircle2 size={20} className="text-tertiary" />
+            <h3 className="font-bold text-on-surface">Tax Classification</h3>
+            <CheckCircle2 size={20} className="text-primary" />
           </div>
-          <div className="text-3xl font-extrabold mb-1">100%</div>
-          <p className="text-sm text-on-surface-variant">Tax portal connection stable.</p>
+          <div className="text-3xl font-extrabold mb-1">{profile?.classification || 'N/A'}</div>
+          <p className="text-sm text-on-surface-variant">{profile?.taxRate || 0}% rate applies</p>
         </div>
       </div>
 
@@ -352,7 +395,7 @@ export default function Dashboard() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowDeductionsModal(false)}>
           <div className="bg-surface-container-lowest rounded-3xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
             <h3 className="text-xl font-bold text-on-surface mb-4">Claim Deductions</h3>
-            <p className="text-sm text-on-surface-variant mb-4">Select expenses to claim as tax deductions:</p>
+            <p className="text-sm text-on-surface-variant mb-4">Select expense categories to claim as tax deductions:</p>
             <div className="space-y-2 mb-6">
               {deductions.map(d => (
                 <label key={d.id} className="flex items-center gap-3 p-3 rounded-xl border border-outline-variant/20 hover:bg-surface-container-low cursor-pointer transition-colors">
@@ -370,11 +413,11 @@ export default function Dashboard() {
               <span className="text-sm font-semibold text-tertiary">Total Savings</span>
               <span className="text-lg font-bold text-tertiary">{formatCurrency(totalSavings)}</span>
             </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowDeductionsModal(false)} className="flex-1 py-2.5 rounded-xl font-semibold text-on-surface-variant hover:bg-surface-container-low transition-colors border border-outline-variant/30">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button onClick={() => setShowDeductionsModal(false)} className="flex-1 py-3 sm:py-2.5 rounded-xl font-semibold text-on-surface-variant hover:bg-surface-container-low transition-colors border border-outline-variant/30 min-h-touch touch-manipulation">
                 Cancel
               </button>
-              <button onClick={handleClaimDeductions} className="flex-1 py-2.5 rounded-xl font-semibold bg-primary text-white hover:bg-primary/90 transition-colors">
+              <button onClick={handleClaimDeductions} className="flex-1 py-3 sm:py-2.5 rounded-xl font-semibold bg-primary text-white hover:bg-primary/90 transition-colors min-h-touch touch-manipulation">
                 Claim Selected
               </button>
             </div>
